@@ -1,0 +1,9 @@
+% bibentry template for lsst.bib in https://github.com/lsst/lsst-texmf/blob/master/texmf/bibtex/bib/lsst.bib
+
+@DocuShare{RTN-023,
+   author = { Brian Yanny },
+    title = {Campaign Tooling -- tools for generating, monitoring and tracking data processing campaigns},
+     year = 2021,
+    month = Aug,
+   handle = {RTN-023},
+      url = {https://rtn-023.lsst.io } }
