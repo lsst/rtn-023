@@ -62,8 +62,10 @@ This run-spec yaml file defines:
 \begin{enumerate}
 
 \item An ordered list of pipetasks to be run: 
+\begin{verbatim}
 pipelineYaml: 
-"\$OBS\_LSST\_DIR/pipelines/imsim/DRP.yaml\#singleFrame,multiVisit"
+"$OBS_LSST_DIR/pipelines/imsim/DRP.yaml#singleFrame,multiVisit"
+\end{verbatim}
 These pipetasks may consist of several steps, and these steps may be defined
 in 'includes' in the DRP.yaml, for instance.
 
@@ -222,6 +224,44 @@ Credit: Y. AlSayyad, H. Chiang}
 	so far.
 
 	\end {enumerate}
+
+\begin{verbatim}
+...
+
+pipelineYaml: "$OBS_LSST_DIR/pipelines/imsim/DRP.yaml#singleFrame,multiVisit"
+project: dev
+campaign: "configuration_example"
+submitPath: ${HOME}/submit/{outCollection}
+
+...
+computing_cloud: LSST
+maxwalltime: 90000
+requestMemory: 2000
+maxattempt: 1
+
+...
+
+payload:
+  runInit: true
+  payloadName: singleFrame_multiVisit
+  butlerConfig: s3://butler-us-central1-panda-dev/dc2/butler.yaml
+  inCollection: 2.2i/defaults/DP0.2
+  output: "u/${USER}/panda_test_dp0_tract_3828_patch_18_w26_iband"
+  outCollection: "{output}/{timestamp}"
+  dataQuery: "instrument='LSSTCam-imSim' and skymap='DC2' and (tract=3828 and patch=18 and band='i')"
+  sw_image: "spodolsky/centos:7-stack-lsst_distrib-w_2021_26"
+  bucket: "s3://butler-us-central1-panda-dev/hsc"
+  s3_endpoint_url: "https://storage.googleapis.com"
+
+
+...
+requestCpus: 1
+...
+templateDataId: "{tract}_{patch}_{band}_{visit}_{exposure}_{detector}"
+
+
+\end{verbatim}
+
 
 \begin{figure}
 \includegraphics[width=\textwidth]{bpsreport.jpg}]
