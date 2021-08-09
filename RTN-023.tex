@@ -36,7 +36,7 @@ Tools for working with the Butler to query for status of data collections to gen
 % Fields: VERSION, DATE, DESCRIPTION, OWNER NAME.
 % See LPM-51 for version number policy.
 \setDocChangeRecord{%
-  \addtohist{1}{YYYY-MM-DD}{Unreleased.}{Brian Yanny}
+  \addtohist{1}{2021-08-09}{Initial release for feedback.}{Brian Yanny}
 }
 
 
@@ -53,95 +53,79 @@ Tools for working with the Butler to query for status of data collections to gen
 \section{Introduction and Definitions}
 
 Data Processing for Rubin occurs at several levels,
-as described in https://dmtn-137.lsst.io. 
+from the lowest level 'quantum' of processing, to the 'task' level for running
+the same routine on many quanta, to a 'run' which is a ordered set of 'task's
+where the order and tasks are nodes in a 'directed acyclic graph' (DAG).
 
+Some more related definitions are described in \cite{DMTN-137}.
 
-A 'run' is defined as a run of a BPS-run-spec.yaml through 'bps submit
-BPS-run-spec.yaml'.
-This run-spec yaml file defines:
-\begin{enumerate}
+A high-level term to describe processing is 'campaign'.
 
-\item An ordered list of pipetasks to be run: 
-\begin{verbatim}
-pipelineYaml: 
-"$OBS_LSST_DIR/pipelines/imsim/DRP.yaml#singleFrame,multiVisit"
-\end{verbatim}
-These pipetasks may consist of several steps, and these steps may be defined
-in 'includes' in the DRP.yaml, for instance.
+A 'campaign' is defined as one or more related sets of runs, to carry out a
+specific data high-level processing goal.  
 
-\item A target cluster to run on, and resource requests such as 
-maximum memory (which can be different for different pipelines), number of cpus,
-and maximum wallclock time, and re-try attempt limits.
-
-\item A butler configuration yaml
-
-\item an input collection to be extracted from the butler mentioned in
-the butler configuration along with a dataQuery which can restict the inputs
-to a subset of the full input collection based on 
-an SQL string (i.e. just do a few visits or a single tract
-or a single band)
-
-\item various other configuration information including location of 
-buckets, output path specs, etc
-
-\end{enumerate}
-
-A campaign is defined as one or more related sets of runs, to carry out a
-specific data processing goal.  Examples of campaigns might be:
+Examples of campaigns are:
 
 \begin{itemize}
 
 \item (re)process the DC2 dataset, starting with the raw visit exposures,
  into tracts.  
 
-\item Process last night's data (some 1000 visits typically) through
-single frame processing pipeline steps.
+\item Process last night's data from the mountain top (some 1000-2000 visits 
+typically) through single frame processing pipeline steps.
 
 \item Perform FGCM calibration on all consolidated visits within a given
-date range
+date range.
 
 \item Generate coadds from all 'good' consolidated visits in a given observing
-date range that overlap a given set of tracts, use a specific FGCM calibration 
+date range that overlap a given set of tracts, use a specific FGCM calibration.
 
 \item Perform Difference Imaging on a specific set of visits, includes gathering
 and generation of comparison templates from visits/coadds of date range.
 
-
 \end{itemize} 
 
-Each run is driven by a yaml-style configuation scripts which are launched
-by a command such as 'bps submit'.
+Note: The generic term 'job' is often used to describe processing at 
+the 'quantum', 'task' or 'run' level.
 
-It would be necessary, when managing large, complex sets of runs in campaigns, 
-such as for nightly or annual Data Release Processing DRP or for 
-Prompt/Alert systems, to track all runs in campaigns submitted as well as their 
-status with links to logs of individual tasks within the campaigns.  
+It is necessary, when managing large, complex sets of runs in campaigns, 
+such as for nightly or annual Data Release Processing (DRP) or for 
+Prompt/Alert systems, to:
+\begin{itemize}
 
-System performance metrics on campaigns may also find it useful to 
-connect directly with 
-a campaign tracking system.
+\item  generate related sets of a campaign's runs in a 
+systematic fashion
 
-The purpose of this document is to describe requirements on such a campaign
-tracking and monitoring system.
+\item track all runs and their associated control parameters and settings, 
+within campaigns when submitted
 
-https://rtn-013.lsst.io
+\item monitor run status for all runs in a campaign, and all currently
+running or recently ended campaigns
+
+\item review stdout and stderr and other log files for individual tasks 
+within runs, especially when a task or quanta within a task fail.
+
+\end {itemize}
+
+Campaign monitoring tools are also potentially closely connected to
+System Performance metrics such as described in \cite{DMTN-173}, for instance'Faro' checks on pipeline outputs \cite{DMTR-311}.
+
+The purpose of this document is to describe requirements on a campaign
+tracking and monitoring system that can begin by assisting in DP0 
+\cite{RTN-001} production and grow to assisting in DRP and other 
+data processing for Rubin.
+
+\section{Campaign Generation and Tracking Requirements}
 
 \begin{figure}
 \includegraphics[width=\textwidth]{CampaignTooling.jpg}]
 \caption{Diagram of Campaign generation (left) and monitoring system (right).
 Credit: C. Slater}
+\label{CampaignTooling}
 \end{figure}
 
-\begin{figure}
-\includegraphics[width=\textwidth]{analdrp.png}]
-\caption{Diagram of Data Release Processing data flow.
-Credit: Y. AlSayyad, H. Chiang}
-\end{figure}
-
-
-\section{Campaign Generation and Tracking Requirements}
-
- To generate processing campaigns and track them these features are desired:
+To generate processing campaigns and track them these features are desired,
+as shown in Figure \ref{CampaignTooling}:
 
 	\begin{enumerate}
 
@@ -211,6 +195,10 @@ Credit: Y. AlSayyad, H. Chiang}
 	completed campaigns, without being overwhelmed by long-ago completed
 	or abandoned campaigns.
 
+	\item As runs may be distributed 'world-wide' for execution,
+	local sites should be able to view only those jobs running at
+	their local site on local resources or get a wider 'world-wide' view.
+
 	\item Ability to straight-forwardly dump dataids (or filenames
 	with paths) and metadata (exposureid, filter) of inputs or outputs
 	from some specific job or task of the processing campaign to
@@ -224,6 +212,142 @@ Credit: Y. AlSayyad, H. Chiang}
 	so far.
 
 	\end {enumerate}
+
+\section{BPS and the PanDA system}
+
+For DP0 \cite{RTN-013}, Rubin is using 
+the \cite{PanDA} workload data.  The Batch Production 
+Service (BPS) \cite{LDM-636} is used as an interface to PanDA.  
+
+BPS:
+\begin{enumerate}
+
+\item Accepts a yaml formatted keyword-value set of parameters which
+defines a single run. (see example run specification yaml below).
+
+\item After 'bps submit <run-spec.yaml>', queries the butler to generate
+a 'quantum graph', a DAG which defines the ordered set of 
+pipeline/pipetask which are to be run on which specific set of input 
+collections (or subsets of a collection which may be picked out via SQL
+type where clauses)
+
+\item Generates an ordered list of tasks, each of which may consist
+of hundreds of quanta, and submits this list submitted to a 
+workload/workflow system (such as HT-Condor or PanDA).
+
+\item Monitors runs which have been submitted  
+	(in the HT-Condor case see Fig. \ref{bpsreport}, currently, could be expanded to PanDA) 
+
+\begin{figure}
+\includegraphics[width=\textwidth]{bpsreport.jpg}]
+\caption{Sample BPS report display showing number of quanta for each task within a give run.
+Credit: M. Gower}
+\label{bpsreport}
+\end{figure}
+
+
+\end{enumerate}
+
+PanDA:
+
+\begin{enumerate}
+
+\item Accepts an ordered list of tasks (from BPS), which specify what
+pipelines to run on which inputs.
+
+\item Distributes tasks to worker nodes, which may be widely distributed.
+
+\item Monitors tasks and associated quanta. See Figs. \ref{pandadash0},\ref{tasks1},\ref{tasks4},\ref{tasks5}
+
+\begin{figure}
+\includegraphics[width=\textwidth]{pandadash0.jpg}]
+\caption{Top level PanDA monitoring dashboard of running and recent jobs
+Credit: S. Padolski}
+\label{pandadash0}
+\end{figure}
+
+\begin{figure}
+\includegraphics[width=\textwidth]{tasks1.jpg}]
+\caption{Next level task list for first job in list
+Credit: H. Lin}
+\label{tasks1}
+\end{figure}
+
+\begin{figure}
+\includegraphics[width=\textwidth]{tasks4.jpg}]
+\caption{Next level status for isr task (2nd from bottom in prev list).
+Credit: H. Lin}
+\label{tasks4}
+\end{figure}
+
+\begin{figure}
+\includegraphics[width=\textwidth]{tasks5.jpg}]
+\caption{Next level status for some of the 603 quanta in this task.
+Credit: H. Lin}
+\label{tasks5}
+\end{figure}
+
+\item Allows viewing of log files for individual tasks. See Fig \ref{log0},\ref{log1}
+
+\begin{figure}
+\includegraphics[width=\textwidth]{log0.jpg}]
+\caption{Getting to the stdout/stderr log for this quantum. 
+Credit: H. Lin}
+\label{log0}
+\end{figure}
+
+\begin{figure}
+\includegraphics[width=\textwidth]{log1.jpg}]
+\caption{A look at stdout/stderr -- if there was an error, one can view it here to help diagnose an issue.
+Credit: H. Lin}
+\label{log1}
+\end{figure}
+
+\item Allows for retries with more memory for individual tasks that fail.
+
+\item More!
+
+\end{enumerate}
+
+Please see \cite{DMTN-168} for more details on running with BPS and PanDA.
+
+\section{Sample BPS 'run' specification yaml}
+
+A 'run' is defined as a run of a BPS-run-spec.yaml through 'bps submit
+BPS-run-spec.yaml'.
+
+This run-spec yaml file defines:
+
+\begin{enumerate}
+
+\item An ordered list of pipetasks to be run: 
+\begin{verbatim}
+pipelineYaml: 
+"$OBS_LSST_DIR/pipelines/imsim/DRP.yaml#singleFrame,multiVisit"
+\end{verbatim}
+These pipetasks may consist of several steps, and these steps may be defined
+in 'includes' in the DRP.yaml, for instance.
+
+\item A target cluster to run on, and resource requests such as 
+maximum memory (which can be different for different pipelines), number of cpus,
+and maximum wallclock time, and re-try attempt limits.
+
+\item A butler configuration yaml
+
+\item an input collection to be extracted from the butler mentioned in
+the butler configuration along with a dataQuery which can restict the inputs
+to a subset of the full input collection based on 
+an SQL string (i.e. just do a few visits or a single tract
+or a single band)
+
+\item various other configuration information including location of 
+buckets, output path specs, etc
+
+\end{enumerate}
+
+Here is an Example look at a run specification yaml script. Each run in a
+campaign is driven by a single yaml-style configuation script which is 
+launched by 'bps submit':
 
 \begin{verbatim}
 ...
@@ -263,47 +387,32 @@ templateDataId: "{tract}_{patch}_{band}_{visit}_{exposure}_{detector}"
 \end{verbatim}
 
 
-\begin{figure}
-\includegraphics[width=\textwidth]{bpsreport.jpg}]
-\caption{Sample BPS report display showing number of quanta for each task within a give run.
-Credit: M. Gower}
-\end{figure}
+\section{Next steps in Campaign Tooling Development}
+
+A visual description of how a typical DRP campaign may be broken into
+related runs is shown in Fig. \ref{WorkflowExampleRunSet}.
 
 \begin{figure}
-\includegraphics[width=\textwidth]{pandadash0.jpg}]
-\caption{Top level PanDA monitoring dashboard of running and recent jobs
-Credit: S. Padolski}
+\includegraphics[width=\textwidth]{analdrp.png}]
+\caption{Diagram of Data Release Processing data flow.
+Credit: Y. AlSayyad, H. Chiang}
+\label{WorkflowExampleRunSet}
 \end{figure}
 
-\begin{figure}
-\includegraphics[width=\textwidth]{tasks1.jpg}]
-\caption{Next level task list for first job in list
-Credit: H. Lin}
-\end{figure}
+To begin, Campaign Tooling plans develop tools to assist with
+campaign generation and tracking for the specific DP0.2 milestone 
+of reprocessing the DC2 DESC data set in the iDF using BPS
+and PanDA \cite{RTN-013}.  
 
-\begin{figure}
-\includegraphics[width=\textwidth]{tasks4.jpg}]
-\caption{Next level status for isr task (2nd from bottom in prev list).
-Credit: H. Lin}
-\end{figure}
+Figure \ref{WorkflowExampleRunSet} can serve as an initial guide to
+what is needed for generation of the DP0.2 campaign (left side of Figure 
+\ref{CampaignTooling}): One run-spec.yaml file for each box in the Figure.  
 
-\begin{figure}
-\includegraphics[width=\textwidth]{tasks5.jpg}]
-\caption{Next level status for some of the 603 quanta in this task.
-Credit: H. Lin}
-\end{figure}
-
-\begin{figure}
-\includegraphics[width=\textwidth]{log0.jpg}]
-\caption{Getting to the stdout/stderr log for this quantum. 
-Credit: H. Lin}
-\end{figure}
-
-\begin{figure}
-\includegraphics[width=\textwidth]{log1.jpg}]
-\caption{A look at stdout/stderr -- if there was an error, one can view it here to help diagnose an issue.
-Credit: H. Lin}
-\end{figure}
+In order to implement the right side of Figure \ref{CampaignTooling}, one may
+need to setup a database to hold and visualize the run-spec definitions, 
+as well as add interface items to BPS and PanDA to get feedback on running
+or submitted jobs.  Some existing tools for generating and tracking 
+workflows are \cite{airflow} and \cite{POMS}.
 
 \appendix
 % Include all the relevant bib files.
