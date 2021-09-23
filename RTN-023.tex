@@ -55,9 +55,9 @@ Tools for working with the Butler to query for status of data collections to gen
 \section{Introduction and Definitions}
 
 Data Processing for Rubin occurs at several levels,
-from the lowest level 'quantum' of processing, to the 'job' (or 'task'?) level 
+from the lowest level 'quantum' of processing, to the 'task' level 
 for running the same routine on many quanta, to a 'run' which is a 
-ordered set of jobs where the order and jobs are nodes 
+ordered set of tasks where the order and tasks are nodes 
 in a 'directed acyclic graph' (DAG).
 
 This document draws heavily from \cite{DMTN-181} which defines campaigns, and 
@@ -122,7 +122,7 @@ within runs, especially when a job or quanta within a job fails.
 
 Campaign monitoring tools are also potentially closely connected to
 System Performance metrics such as described in \cite{DMTN-173}, 
-for instance \texttt{Faro} checks on pipeline outputs \cite{DMTR-311}.
+for instance \texttt{Faro} checks on pipeline outputs \cite{DMTR-311}, \cite{FARO}.
 
 The purpose of this document is to describe requirements on a campaign
 tracking and monitoring system that can begin by assisting in DP0 
@@ -147,10 +147,11 @@ as shown in Figure \ref{CampaignTooling}:
 	(or other top level workflow submit scripts) which request processing
 	of subset of inputs needing to be processed, pipelines to be run,
 	outputs described.  This could, for instance, be achieved by having
-	a set of template yaml configs -- one for each procesing type
-	(generate calibs from raw calibs, Single Frame, Consolidate Visit, 
+	a set of template yaml configs -- one for each processing step (see step
+	list for DRP below) (generate calibs from raw calibs, Single Frame, Consolidate Visit, 
 	Photo calib FGCM, astrometric calib skyMap, 
-	Coadd/forced Photometry, Difference
+	make coadd for a set of tracts, run photometry on the coadd,
+	run forced Photometry on the individual visits of a coadd, Difference
 	Imaging Analysis) where a 'sed' script or similiar would fill in
 	a visit list, a src catalog list, a tract list, etc.
 
@@ -189,7 +190,8 @@ as shown in Figure \ref{CampaignTooling}:
 	While one doesn't wish to reproduce the butler registry, there
 	is a need to store somewhere campaign or run 'tuples' which
 	can be a set of BPS submit file.yaml along with information
-	such as time-of-submission and current status.
+	such as time-of-submission and current status.  
+
 
 	\item Ability to quickly access and view logs of each 
 	campaign's individual tasks/jobs to determine errors
@@ -207,6 +209,12 @@ as shown in Figure \ref{CampaignTooling}:
 	a campaign or set of campaigns are running.  
 
 	\end {enumerate}
+
+	The JIRA system is a candidate place where these campaign-grouped submit file
+	run 'tuples' could be stored.  Each campaign would have a JIRA ticket number
+	and could include sub-tickets on each BPS submit run for the campaign.
+	Another option would be a separate (outside or inside the Butler) Database table such as 
+	that which might hold an exposure catalog.
 
 \section{BPS and the PanDA system}
 
@@ -226,15 +234,32 @@ BPS launches a butler query to
 generate a 'quantum graph', a DAG which defines the ordered set of 
 pipetasks which are to be run on which specific set of input 
 collections (or subsets of a collection which may be picked out via SQL-style
-where clauses).
+where clauses).  
 
 \item BPS generates for the requested pipeline, an ordered list of jobs, 
 each of which may consist of hundreds of quanta, and submits this 
 list to a workload system (such as HT-Condor or PanDA).
 
+\item The BPS system, in Execution Butler mode (which is the default mode for processing) creates, 
+and after the quantum graph is generated for the run, a small (currently sqlLite) database 
+containing all the necessary Butler information (metadata and data storage link URIs) to process 
+all steps in the run.  This Execution Butler is constantly updated by the processing the data in question.
+
+\item If data is being processed at a remote site, 
+the bps submit step could also help initiate the moving of centrally stored files to a remote processing
+data store, using, for instance, Rucio+FTS.
+
 \item BPS monitors runs which have been submitted  (in the HT-Condor case 
 see Fig. \ref{bpsreport};  in the PanDA case, there may need to be more
 feedback send back, or pointers on how to poll for status).
+
+\item When the processing of all tasks in a run completes, a 'merge' step is run by BPS which syncs the 
+small Execution Butler metadata, include info on any new files generated during processing,
+back into the main Butler.  
+
+\item If data is being processed at a remote site, 
+the merge step could also help initiate the moving of local file back to a central
+data store, using, for instance, Rucio+FTS.
 
 \begin{figure}
 \includegraphics[width=\textwidth]{bpsreport.jpg}]
@@ -257,6 +282,142 @@ pipetasks to run on which inputs.
 
 \item Monitors tasks and associated quanta. 
 See Figs. \ref{pandadash0},\ref{tasks1},\ref{tasks4},\ref{tasks5}
+
+\end{enumerate}
+
+\subsection{Monitoring jobs in PanDA} 
+
+PanDA can accept http:// url queries to access the current status of running and completed jobs.
+
+These URLs may be accessed with a python script.  http:// may be used rather than https:// to avoid
+needed to authenticate credentials.
+
+Warning: There is currently a limit of some 500 requests/hour to avoid getting IP blocked.
+This can be adjusted if needed.
+
+A term 'json' may be added to the URL to format the output as json text.
+
+Sample syntax for PanDA running/completed job status queries::
+
+\begin{verbatim}
+http://panda-doma.cern.ch/jobs/?date_from=21-09-2021&date_to=22-09-2021
+\end{verbatim}
+
+There are three levels of monitoring: workflows, tasks and then jobs at the lowest level.
+
+One sees (current) workflows with a query such as:
+
+\begin{verbatim}
+http://panda-doma.cern.ch/idds/wfprogress
+\end{verbatim}
+
+or in json format:
+\begin{verbatim}
+http://panda-doma.cern.ch/idds/wfprogress/?json
+\end{verbatim}
+
+(this seems to not quite be in standard json format, but look at the raw output to extract tasknames)
+
+This returns json formatted text which includes "run names" r\_name
+(one per BPS submit), one can pick out one or more run names of interest and look up the tasks associated
+with that run name (note the * construct in the URL):
+
+\begin{verbatim}
+http://panda-doma.cern.ch/tasks/?taskname=u_huanlin_panda_test_ci_imsim_d_2021_09_15_w38_20210923t155401z*&json
+\end{verbatim}
+
+By default the search looks for jobs within the last 7 days, one may search a range of times/dates
+by specifying a date or datetime string:
+
+\begin{verbatim}
+https://panda-doma.cern.ch/jobs/?date_from=21-09-2021T10:00&date_to=21-09-2021T11:00
+\end{verbatim}
+
+This particular run, which is a submission of a 'step3' (see below) from the
+DRP processing list, contains 14 'tasks' (as PanDA calls them).
+These have names:
+
+\begin{verbatim}
+PREFIX="u_huanlin_panda_test_ci_imsim_d_2021_09_15_w38_20210923t155401z"
+
+reqid: 6237 taskname: ${PREFIX}_deblend_3811
+reqid: 6236 taskname: ${PREFIX}_healSparsePropertyMaps_3809
+reqid: 6235 taskname: ${PREFIX}_transformObjectTable_3816
+reqid: 6234 taskname: ${PREFIX}_mergeDetections_3810
+reqid: 6233 taskname: ${PREFIX}_selectGoodSeeingVisits_3804
+reqid: 6232 taskname: ${PREFIX}_measure_3812
+reqid: 6231 taskname: ${PREFIX}_templateGen_3807
+reqid: 6230 taskname: ${PREFIX}_assembleCoadd_3806
+reqid: 6229 taskname: ${PREFIX}_makeWarp_3805
+reqid: 6228 taskname: ${PREFIX}_pipetaskInit_3803
+reqid: 6227 taskname: ${PREFIX}_detection_3808
+reqid: 6226 taskname: ${PREFIX}_consolidateObjectTable_3817
+reqid: 6225 taskname: ${PREFIX}_forcedPhotCoadd_3814
+reqid: 6224 taskname: ${PREFIX}_mergeMeasurements_3813
+reqid: 6223 taskname: ${PREFIX}_writeObjectTable_3815
+
+\end{verbatim}
+
+Note that the order here of the reqid's doesn't match the order
+of the tasks in the step3 definition, which is in this file:
+
+\begin{verbatim}
+$OBS_LSST_DIR/pipelines/imsim/DRP.yaml
+\end{verbatim}
+
+This file defines step3 as these tasks in this order:
+    step3:
+        subset:
+\begin{enumerate}
+        \item makeWarp
+        \item assembleCoadd
+        \item detection
+        \item mergeDetections
+        \item deblend
+        \item measure
+        \item mergeMeasurements
+        \item forcedPhotCoadd
+        \item transformObjectTable
+        \item writeObjectTable
+        \item consolidateObjectTable
+        \item healSparsePropertyMaps
+        \item selectGoodSeeingVisits
+        \item templateGen
+\end{enumerate}
+
+Sorting the tasks by the numerical suffix at the end of the task name:
+
+\begin{verbatim}
+
+reqid = task
+
+reqid: 6228 taskname: ${PREFIX}_pipetaskInit_3803
+reqid: 6233 taskname: ${PREFIX}_selectGoodSeeingVisits_3804
+reqid: 6229 taskname: ${PREFIX}_makeWarp_3805
+reqid: 6230 taskname: ${PREFIX}_assembleCoadd_3806
+reqid: 6231 taskname: ${PREFIX}_templateGen_3807
+reqid: 6227 taskname: ${PREFIX}_detection_3808
+reqid: 6236 taskname: ${PREFIX}_healSparsePropertyMaps_3809
+reqid: 6234 taskname: ${PREFIX}_mergeDetections_3810
+reqid: 6237 taskname: ${PREFIX}_deblend_3811
+reqid: 6232 taskname: ${PREFIX}_measure_3812
+reqid: 6224 taskname: ${PREFIX}_mergeMeasurements_3813
+reqid: 6225 taskname: ${PREFIX}_forcedPhotCoadd_3814
+reqid: 6223 taskname: ${PREFIX}_writeObjectTable_3815
+reqid: 6235 taskname: ${PREFIX}_transformObjectTable_3816
+reqid: 6226 taskname: ${PREFIX}_consolidateObjectTable_3817
+
+One may lookup status information about a specific task (=reqid) by using this syntax:
+
+For status of the deblend task:
+
+https://panda-doma.cern.ch/task/6232/?json
+
+\end{verbatim}
+
+\subsection{More PanDA monitoring}
+
+\begin{enumerate}
 
 \begin{figure}
 \includegraphics[width=\textwidth]{pandadash0.jpg}]
@@ -305,7 +466,8 @@ Credit: H. Lin}
 
 \item Allows for retries with more memory for individual tasks that fail.
 
-\item More!
+\item There are graphana, kibana elasticsearch plots that can be setup to monitor overall
+PanDA system status and performance.
 
 \end{enumerate}
 
@@ -322,8 +484,7 @@ This run-spec yaml file defines:
 
 \item An existing (sub)pipeline definition to use for the run:
 \begin{verbatim}
-pipelineYaml: 
-"$OBS_LSST_DIR/pipelines/imsim/DRP.yaml#singleFrame,multiVisit"
+pipelineYaml: "$OBS_LSST_DIR/pipelines/imsim/DRP.yaml#step3"
 \end{verbatim}
 These pipetasks may consist of several steps, and these steps may be defined
 in 'includes' in the DRP.yaml, for instance.
@@ -345,43 +506,59 @@ buckets, output path specs, etc
 
 \end{enumerate}
 
-Here is an example look at a run specification yaml script. Various
-critical name-value parameters are shown. Each run in a
+Here is an example look at a run specification yaml script. This one 
+performs 'step3' pipeline tasks on a input collection of data. 
+A full 'campaign' would be a set of perhaps 6 of these files, one
+for step1, one for step2, etc.
+Various critical name-value parameters are shown. Each run in a
 campaign is (currently) driven by a single yaml-style 
 configuation script which is launched by 'bps submit':
 
 \begin{verbatim}
-...
+#includeConfigs:
+#- ${CTRL_BPS_DIR}/python/lsst/ctrl/bps/wms/panda/conf_example/pipelines_check_idf.yaml
 
-pipelineYaml: "$OBS_LSST_DIR/pipelines/imsim/DRP.yaml#singleFrame,multiVisit"
-project: dev
-campaign: "configuration_example"
-submitPath: ${HOME}/submit/{outCollection}
-
-...
-computing_cloud: LSST
-maxwalltime: 90000
-requestMemory: 2000
-maxattempt: 1
-
-...
+pipelineYaml: "$OBS_LSST_DIR/pipelines/imsim/DRP.yaml#step3"
 
 payload:
+  payloadName: pipelines_check
   runInit: true
-  payloadName: singleFrame_multiVisit
-  butlerConfig: s3://butler-us-central1-panda-dev/dc2/butler.yaml
-  inCollection: 2.2i/defaults/DP0.2
-  output: "u/${USER}/panda_test_dp0_tract_3828_patch_18_w26_iband"
+#  output: "u/{operator}/{payload_name}"
+  output: "u/{operator}/panda_test_ci_imsim_d_2021_09_15_w38"
   outCollection: "{output}/{timestamp}"
-  dataQuery: "instrument='LSSTCam-imSim' and skymap='DC2' and (tract=3828 and patch=18 and band='i')"
-  sw_image: "spodolsky/centos:7-stack-lsst_distrib-w_2021_26"
-  bucket: "s3://butler-us-central1-panda-dev/hsc"
-  s3_endpoint_url: "https://storage.googleapis.com"
+  butlerConfig: s3://butler-us-central1-panda-dev/dc2/butler.yaml
+  inCollection: "2.2i/defaults/ci_imsim"
+  dataQuery: "instrument='LSSTCam-imSim' and skymap='DC2' and (visit=256383 and detector=26)"
+#  dataQuery: "tract = 9615 and patch=30 and detector IN (10..11) and instrument='HSC' and skymap='hsc_rings_v1' and band in ('r')"
 
-...
-requestCpus: 1
-...
-templateDataId: "{tract}_{patch}_{band}_{visit}_{exposure}_{detector}"
+  sw_image: "lsstsqre/centos:7-stack-lsst_distrib-w_2021_38"
+  fileDistributionEndPoint: "s3://butler-us-central1-panda-dev/hsc/{payload_folder}
+/{uniqProcName}/"
+  s3_endpoint_url: "https://storage.googleapis.com"
+  payload_folder: payload
+  runner_command: 'docker run --network host --privileged --env AWS_ACCESS_KEY_ID=$
+(</credentials/AWS_ACCESS_KEY_ID) --env AWS_SECRET_ACCESS_KEY=$(</credentials/AWS_S
+ECRET_ACCESS_KEY) --env PGPASSWORD=$(</credentials/PGPASSWORD) --env S3_ENDPOINT_UR
+L=${S3_ENDPOINT_URL} {sw_image} /bin/bash -c "source /opt/lsst/software/stack/loadL
+SST.bash;cd /tmp;ls -a;setup lsst_distrib;pwd;python3 \${CTRL_BPS_DIR}/python/lsst/
+ctrl/bps/wms/panda/edgenode/cmd_line_decoder.py _cmd_line_ " >&2;'
+
+#PANDA plugin specific settings:
+idds_server: "https://aipanda015.cern.ch:443/idds"
+placeholderParams: ['qgraphNodeId', 'qgraphId']
+
+#IDF PanDA specific settings:
+computing_cloud: LSST
+
+#SLAC PanDA specific settings:
+#computing_cloud: US
+#computeSite: DOMA_LSST_SLAC_TEST
+
+operator: huanlin    # defaults to login on submit machine
+project: dev
+campaign: quick
+
+#....
 
 \end{verbatim}
 
@@ -408,8 +585,9 @@ require further discussion regarding implemtation details.
 	what has already been processed, and if not, why not.
 	
 	\item Efficiency is a consideration, as one does not wish to
-	continually poll the butler for the state of all past millions of
-	visits, for example.
+	continually poll the butler or PanDA for the state of all past 
+	millions of visits, for example.  This can be done with data to/from
+	range terms in the PanDA query.
 
 	\item Helper scripts can assist with dumping dataids (or filenames
 	with paths) and other info from the butler related to
@@ -506,6 +684,154 @@ as well as add interface items to BPS and PanDA to get feedback on running
 or submitted jobs.  Some existing tools for generating and tracking 
 workflows are \cite{airflow} and \cite{POMS} as well as the Pegasus Ensemble Manager \cite{PEM}.
 
+\section{DRP.yaml steps}
+A recent version of the DRP.yaml file which define steps 1-7 in terms of pipelines/pipetasks units
+to be run:
+
+\begin{verbatim}
+
+description: DRP specialized for LSSTImSim
+instrument: lsst.obs.lsst.LsstCamImSim
+imports:
+  # Inherits directly from pipe_tasks to avoid redefining sourceTable subset
+  - location: $PIPE_TASKS_DIR/pipelines/DRP.yaml
+tasks:
+    isr:
+        class: lsst.ip.isr.IsrTask
+        config:
+            connections.newBFKernel: bfk
+            doDefect: False
+            doBrighterFatter: True
+    calibrate:
+        class: lsst.pipe.tasks.calibrate.CalibrateTask
+        config:
+            connections.astromRefCat: 'cal_ref_cat_2_2'
+            connections.photoRefCat: 'cal_ref_cat_2_2'
+            astromRefObjLoader.ref_dataset_name: 'cal_ref_cat_2_2'
+            photoRefObjLoader.ref_dataset_name: 'cal_ref_cat_2_2'
+            python: >
+                config.astromRefObjLoader.filterMap = {band: 'lsst_%s_smeared' % (band) for band in 'ugrizy'};
+                config.photoRefObjLoader.filterMap = {band: 'lsst_%s_smeared' % (band) for band in 'ugrizy'};
+    measure:
+        class: lsst.pipe.tasks.multiBand.MeasureMergedCoaddSourcesTask
+        config:
+            connections.refCat: 'cal_ref_cat_2_2'
+            match.refObjLoader.ref_dataset_name: 'cal_ref_cat_2_2'
+            python: >
+                config.match.refObjLoader.filterMap = {band: 'lsst_%s_smeared' % (band) for band in 'ugrizy'};
+subsets:
+    step1:
+        subset:
+        - isr
+        - characterizeImage
+        - calibrate
+        - writeSourceTable
+        - transformSourceTable
+        description: >
+            Per-detector tasks that can be run together to start the DRP pipeline.
+
+            These may or may not be run with 'tract' or 'patch' as part of the data ID
+            expression. This specific pipeline contains no tasks that require full
+            visits. Running with 'tract' (and 'patch') constraints will select
+            partial visits that overlap that region.
+
+            In data release processing, operators should stop to address unexpected
+            failures before continuing on to step2.
+    step2:
+        subset:
+        - consolidateSourceTable
+        - consolidateVisitSummary
+        - makeCcdVisitTable
+        - makeVisitTable
+        description: >
+            Per-visit tasks that can be run together, but only after the 'step1'.
+
+            These may or may not be run with 'tract' or 'patch' as part of the data ID
+            expression.  Running with 'tract' (and 'patch') constraints will select
+            partial visits that overlap that region.
+            This specific pipeline contains no tasks that require full visits.
+
+            This subset is considered a workaround for missing middleware and task
+            functionality.  It may be removed in the future.
+    step3:
+        subset:
+        - makeWarp
+        - assembleCoadd
+        - detection
+        - mergeDetections
+        - deblend
+        - measure
+        - mergeMeasurements
+        - forcedPhotCoadd
+        - transformObjectTable
+        - writeObjectTable
+        - consolidateObjectTable
+        - healSparsePropertyMaps
+        - selectGoodSeeingVisits
+        - templateGen
+        description: >
+            Tasks that can be run together, but only after the 'step1' and 'step2'
+            subsets.
+
+            These should be run with explicit 'tract' constraints essentially all the
+            time, because otherwise quanta will be created for jobs with only partial
+            visit coverage.
+
+            It is expected that many forcedPhotCcd quanta will "normally" fail when
+            running this subset, but this isn't a problem right now because there
+            are no tasks downstream of it.  If other tasks regularly fail or we add
+            tasks downstream of forcedPhotCcd, these subsets or the tasks will need
+            additional changes.
+
+            This subset is considered a workaround for missing middleware and task
+            functionality.  It may be removed in the future.
+    step4:
+        subset:
+        - forcedPhotCcd
+        - forcedPhotDiffim
+        - getTemplate
+        - imageDifference
+        - transformDiaSourceCat
+        description: >
+            Tasks that can be run together, but only after the 'step1', 'step2'
+            and 'step3' subsets
+
+            These detector-level tasks should not be run with
+            'tract' or 'patch' as part of the data ID expression if all
+            reference catalogs or diffIm templates that cover these
+            detector-level quanta are desired.
+    step5:
+        subset:
+        - drpAssociation
+        - drpDiaCalculation
+        - forcedPhotCcdOnDiaObjects
+        - forcedPhotDiffOnDiaObjects
+        description: >
+            Tasks that can be run together, but only after the 'step1', 'step2',
+            'step3', and 'step4' subsets
+
+            This step includes tract-level aggregation Tasks. These should be
+            run with explicit 'tract' constraints in the data query, otherwise
+            quanta will be created for jobs with only partial visit coverage.
+
+    step6:
+        subset:
+        - consolidateDiaSourceTable
+        description: >
+            Tasks that can be run together, but only after the 'step1', 'step2',
+            'step3', and 'step4' subsets
+
+            This step includes visit-level aggregation tasks. Running without
+            tract or patch in the data query is recommended, otherwise the
+            outputs of consolidateDiaSourceTable will not contain complete visits.
+
+            This subset is separate from step4 to signal to operators to pause
+            to assess unexpected image differencing failures before these
+            aggregation steps. Otherwise, if run in the same quantum graph,
+            aggregated data products (e.g. diaObjects) would not be created if
+            one or more of the expected inputs is missing.
+
+\end{verbatim}
 
 \appendix
 % Include all the relevant bib files.
